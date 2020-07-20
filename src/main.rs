@@ -18,6 +18,7 @@ pub struct SuperBlock {
     pub s_ronly: u8,         // 415
     pub s_time: [u16; 2],    // 416 - 419
 }
+
 #[derive(Clone)]
 pub struct Inode {
     pub i_mode: u16,      // 0 - 1
@@ -65,50 +66,6 @@ fn as_u16_be(ar: &[u8]) -> u16 {
 
 fn as_i32_be(ar: &[u8]) -> i32 {
     ((ar[0] as i32) << 24) + ((ar[1] as i32) << 16) + ((ar[2] as i32) << 8) + ((ar[3] as i32) << 0)
-}
-
-fn read_inode(v: &[u8]) -> Inode {
-    let mut i_addr: [u16; 8] = [0; 8];
-    for i in 0..8 {
-        i_addr[i] = as_u16_be(&v[(8 + i * 2)..(8 + (i + 1) * 2)]);
-    }
-    Inode {
-        i_mode: as_u16_be(&v[0..2]),
-        i_nlink: v[2] as u8,
-        i_uid: v[3] as u8,
-        i_gid: v[4] as u8,
-        i_size0: v[5] as u8,
-        i_size1: as_u16_be(&v[6..8]),
-        i_addr: i_addr,
-        i_atime: as_i32_be(&v[24..28]),
-        i_mtime: as_i32_be(&v[28..32]),
-    }
-}
-
-fn read_super_block(v: &[u8]) -> SuperBlock {
-    let mut s_free: [u16; 100] = [0; 100];
-    let mut s_inode: [u16; 100] = [0; 100];
-    let mut s_time: [u16; 2] = [0; 2];
-
-    for i in 0..100 {
-        s_free[i] = as_u16_be(&v[(6 + i)..(8 + i)]);
-        s_inode[i] = as_u16_be(&v[(210 + i)..(212 + i)]);
-    }
-    s_time[0] = as_u16_be(&v[416..418]);
-    s_time[1] = as_u16_be(&v[418..420]);
-    SuperBlock {
-        s_isize: as_u16_be(&v[0..2]),
-        s_fsize: as_u16_be(&v[2..4]),
-        s_nfree: as_u16_be(&v[4..6]),
-        s_ninode: as_u16_be(&v[208..210]),
-        s_flock: v[412] as u8,
-        s_ilock: v[413] as u8,
-        s_fmod: v[414] as u8,
-        s_ronly: v[415] as u8,
-        s_free: s_free,
-        s_inode: s_inode,
-        s_time: s_time,
-    }
 }
 
 fn get_inode(i: u16, disk: &[u8]) -> Inode {
@@ -237,40 +194,38 @@ fn main() {
             std::process::exit(1);
         }
     }
-    let superblock = read_super_block(&filesystem[512..(512 + 512)]);
 
-    let inode_block = (superblock.s_isize as u32) * 16; // s_isize * 512 / 36 = s_isize * 16
-    let mut inodes = Vec::new();
-    for i in 0..inode_block {
-        let d = &filesystem[(1024 + i * 36) as usize..(1024 + (i + 1) * 36) as usize];
-        let inode = read_inode(&d);
-        inodes.push(inode);
-    }
     let mut current_node_i = 1;
     loop {
         let current_node = &get_inode(current_node_i, &filesystem);
-        print!("> ");
+        print!(" > ");
         io::stdout().flush().unwrap();
         let mut input = String::new();
         match io::stdin().read_line(&mut input) {
-            Ok(_) => match input.trim() {
-                "ls" => ls(current_node, &filesystem, false),
-                "ls -l" => ls(current_node, &filesystem, true),
-                "cd" => match cd(current_node, "/", &filesystem) {
-                    Ok(v) => current_node_i = v,
-                    _ => (),
-                },
-                other => {
-                    if other.starts_with("cd ") {
-                        match cd(current_node, other.replace("cd ", "").trim(), &filesystem) {
+            Ok(_) => {
+                let commands: Vec<&str> = input.split_whitespace().collect::<Vec<&str>>();
+                match commands.first() {
+                    Some(v) => match *v {
+                        "ls" => {
+                            if commands.len() == 1 {
+                                ls(current_node, &filesystem, false);
+                            } else {
+                                if commands.into_iter().filter(|x| x.starts_with("-") && x.contains("l")).collect::<Vec<&str>>().len() > 0 {
+                                    ls(current_node, &filesystem, true);
+                                } else {
+                                    ls(current_node, &filesystem, false);
+                                }
+                            }
+                        }
+                        "cd" => match cd(current_node, if commands.len() > 1 { commands[1] } else { "/" }, &filesystem) {
                             Err(e) => println!("{}", e),
                             Ok(v) => current_node_i = v,
-                        }
-                    } else {
-                        println!("no such command: {}", other);
-                    }
-                }
-            },
+                        },
+                        other => println!("no such command: {}", other),
+                    },
+                    None => (),
+                };
+            }
             Err(error) => println!("error: {}", error),
         }
     }
